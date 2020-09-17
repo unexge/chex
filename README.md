@@ -1,0 +1,3 @@
+# chex
+
+Interactive cargo check.
