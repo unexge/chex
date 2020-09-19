@@ -1,71 +1,61 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
-use std::io::Write;
+use std::io::{stdin, stdout, Write};
 
+use cargo_metadata::diagnostic::{Diagnostic, DiagnosticLevel};
+use termion::event::{Event, Key};
+use termion::input::TermRead;
+use termion::raw::IntoRawMode;
 use termion::{clear, color, cursor, style};
 
-use crate::group::Group;
-
-pub struct Renderer<'a> {
-    groups: Vec<Group<'a>>,
+pub struct Renderer {
+    diagnostics: Vec<Diagnostic>,
     focused: Option<usize>,
     expanded: HashMap<usize, bool>,
 }
 
-impl<'a> Renderer<'a> {
-    pub fn new(groups: Vec<Group<'a>>) -> Self {
+impl Renderer {
+    pub fn new(diagnostics: Vec<Diagnostic>) -> Self {
         Self {
-            groups,
+            diagnostics,
             focused: None,
             expanded: HashMap::new(),
         }
     }
 
-    pub fn focus_next(&mut self) {
-        if self.groups.is_empty() {
-            return;
-        }
+    pub fn start(mut self) -> Result<(), Box<dyn Error>> {
+        let stdin = stdin();
+        let mut stdout = stdout().into_raw_mode().unwrap();
 
-        self.focused = match self.focused.take() {
-            Some(x) if x == self.groups.len() - 1 => Some(0),
-            Some(x) => Some(x + 1),
-            None => Some(0),
-        }
-    }
+        self.render(&mut stdout);
 
-    pub fn focus_prev(&mut self) {
-        if self.groups.is_empty() {
-            return;
-        }
-
-        self.focused = match self.focused.take() {
-            Some(0) => Some(self.groups.len() - 1),
-            Some(x) => Some(x - 1),
-            None => Some(self.groups.len() - 1),
-        }
-    }
-
-    pub fn expand_current(&mut self) {
-        match self.focused {
-            Some(i) => {
-                let entry = self.expanded.entry(i).or_insert(false);
-                *entry = !*entry;
+        for evt in stdin.events() {
+            match evt? {
+                Event::Key(Key::Char('q')) => break,
+                Event::Key(Key::Up) => {
+                    self.focus_prev();
+                }
+                Event::Key(Key::Down) => {
+                    self.focus_next();
+                }
+                Event::Key(Key::Left) => {
+                    self.collapse_current();
+                }
+                Event::Key(Key::Right) => {
+                    self.expand_current();
+                }
+                _ => {}
             }
-            None => {}
+
+            self.render(&mut stdout);
         }
+
+        write!(stdout, "{}", cursor::Show).unwrap();
+        Ok(())
     }
 
-    pub fn collapse_current(&mut self) {
-        match self.focused {
-            Some(i) => {
-                let entry = self.expanded.entry(i).or_insert(true);
-                *entry = !*entry;
-            }
-            None => {}
-        }
-    }
-
-    pub fn render(&self, output: &mut impl Write) {
+    fn render(&self, output: &mut impl Write) {
         write!(
             output,
             "{}{}{}",
@@ -75,26 +65,28 @@ impl<'a> Renderer<'a> {
         )
         .unwrap();
 
-        for (i, group) in self.groups.iter().enumerate() {
+        for (i, diagnostic) in self.diagnostics.iter().enumerate() {
             let is_focused = matches!(self.focused, Some(x) if x == i);
             let is_expanded = self.expanded.get(&i).unwrap_or(&false);
-            self.render_group(output, group, is_focused, *is_expanded);
+            self.render_diagnostic(output, diagnostic, is_focused, *is_expanded);
         }
 
         output.flush().unwrap();
     }
 
-    fn render_group(
+    fn render_diagnostic(
         &self,
         output: &mut impl Write,
-        group: &Group,
+        diagnostic: &Diagnostic,
         is_focused: bool,
         is_expanded: bool,
     ) {
-        let mut lines = group.inner().iter();
-        let color: Box<dyn fmt::Display> = match group {
-            Group::Error(_) => Box::new(color::Fg(color::Red)),
-            Group::Warning(_) => Box::new(color::Fg(color::Yellow)),
+        let rendered = diagnostic.rendered.clone().unwrap_or("".to_string());
+        let mut lines = rendered.lines();
+        let color: Box<dyn fmt::Display> = match diagnostic.level {
+            DiagnosticLevel::Error | DiagnosticLevel::Ice => Box::new(color::Fg(color::Red)),
+            DiagnosticLevel::Warning => Box::new(color::Fg(color::Yellow)),
+            _ => Box::new(color::Fg(color::Reset)),
         };
 
         write!(output, "\r\n").unwrap();
@@ -103,8 +95,9 @@ impl<'a> Renderer<'a> {
         if is_focused {
             write!(
                 output,
-                "\t{}{}{}{}{}\r\n",
+                "\t{}{}{}{}{}{}\r\n",
                 style::Underline,
+                style::Bold,
                 color,
                 summary,
                 color::Fg(color::Reset),
@@ -114,10 +107,12 @@ impl<'a> Renderer<'a> {
         } else {
             write!(
                 output,
-                "\t{}{}{}\r\n",
+                "\t{}{}{}{}{}\r\n",
+                style::Bold,
                 color,
                 summary,
                 color::Fg(color::Reset),
+                style::Reset,
             )
             .unwrap();
         }
@@ -126,6 +121,48 @@ impl<'a> Renderer<'a> {
             for line in lines {
                 write!(output, "\t{}\r\n", line).unwrap();
             }
+        }
+    }
+
+    fn focus_next(&mut self) {
+        if self.diagnostics.is_empty() {
+            return;
+        }
+
+        self.focused = match self.focused.take() {
+            Some(x) if x == self.diagnostics.len() - 1 => Some(0),
+            Some(x) => Some(x + 1),
+            None => Some(0),
+        }
+    }
+
+    fn focus_prev(&mut self) {
+        if self.diagnostics.is_empty() {
+            return;
+        }
+
+        self.focused = match self.focused.take() {
+            Some(0) => Some(self.diagnostics.len() - 1),
+            Some(x) => Some(x - 1),
+            None => Some(self.diagnostics.len() - 1),
+        }
+    }
+
+    fn expand_current(&mut self) {
+        match self.focused {
+            Some(i) => {
+                self.expanded.insert(i, true);
+            }
+            None => {}
+        }
+    }
+
+    fn collapse_current(&mut self) {
+        match self.focused {
+            Some(i) => {
+                self.expanded.remove(&i);
+            }
+            None => {}
         }
     }
 }
