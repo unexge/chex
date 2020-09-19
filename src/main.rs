@@ -5,7 +5,7 @@ mod renderer;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let diagnostics = diagnostics::from_cargo_check(".")?;
-    if diagnostics.len() == 0 {
+    if diagnostics.is_empty() {
         return Ok(());
     }
 

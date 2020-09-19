@@ -152,20 +152,14 @@ impl Renderer {
     }
 
     fn expand_current(&mut self) {
-        match self.focused {
-            Some(i) => {
-                self.expanded.insert(i, true);
-            }
-            None => {}
+        if let Some(i) = self.focused {
+            self.expanded.insert(i, true);
         }
     }
 
     fn collapse_current(&mut self) {
-        match self.focused {
-            Some(i) => {
-                self.expanded.remove(&i);
-            }
-            None => {}
+        if let Some(i) = self.focused {
+            self.expanded.remove(&i);
         }
     }
 }
