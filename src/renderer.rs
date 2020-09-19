@@ -81,7 +81,10 @@ impl Renderer {
         is_focused: bool,
         is_expanded: bool,
     ) {
-        let rendered = diagnostic.rendered.clone().unwrap_or("".to_string());
+        let rendered = diagnostic
+            .rendered
+            .clone()
+            .unwrap_or_else(|| "".to_string());
         let mut lines = rendered.lines();
         let color: Box<dyn fmt::Display> = match diagnostic.level {
             DiagnosticLevel::Error | DiagnosticLevel::Ice => Box::new(color::Fg(color::Red)),
